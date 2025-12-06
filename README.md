@@ -1,5 +1,6 @@
 # Dynogy V1 - Core Deployment Agent
 
+
 Dynogy est un agent de déploiement automatisé conçu pour tourner sur un NAS Synology. Il reçoit des webhooks Git et déclenche automatiquement le déploiement de services via Docker Compose.
 
 ## 🎯 Fonctionnalités V1
