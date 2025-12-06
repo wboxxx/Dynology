@@ -1,0 +1,20 @@
+{
+  "name": "dynogy",
+  "version": "1.0.0",
+  "description": "Dynogy - Automated deployment agent for services on NAS",
+  "scripts": {
+    "deploy": "node deploy-to-nas.js",
+    "deploy:nas": "node deploy-to-nas.js"
+  },
+  "keywords": [
+    "deployment",
+    "docker",
+    "nas",
+    "synology"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ssh2": "^1.15.0"
+  }
+}
