@@ -19,8 +19,8 @@ RUN npm install --omit=dev
 # Copy application files
 COPY agent/ ./
 
-# Make deploy script executable
-RUN chmod +x deploy.sh
+# Convert line endings from Windows (CRLF) to Unix (LF) and make deploy script executable
+RUN sed -i 's/\r$//' deploy.sh && chmod +x deploy.sh
 
 # Expose port
 EXPOSE 4000

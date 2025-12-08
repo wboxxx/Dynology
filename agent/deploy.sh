@@ -82,13 +82,72 @@ fi
 
 log "Found docker-compose.yml"
 
+# Configure Git safe.directory to avoid ownership issues
+log "Configuring Git safe.directory..."
+git config --global --add safe.directory "$REPO_DIR" 2>&1 | tee -a "$LOG_FILE" || {
+    log_warn "Failed to add safe.directory, continuing anyway..."
+}
+
 # Step 1: Git pull
 log "Step 1: Pulling latest changes from git..."
-if git pull 2>&1 | tee -a "$LOG_FILE"; then
-    log_success "Git pull completed"
-else
-    log_error "Git pull failed"
+
+# Check for local changes and handle them
+# Temporarily disable set -e to check for changes without exiting
+set +e
+git diff --quiet 2>&1 > /dev/null
+HAS_UNSTAGED=$?
+git diff --cached --quiet 2>&1 > /dev/null
+HAS_STAGED=$?
+set -e
+
+if [ $HAS_UNSTAGED -ne 0 ] || [ $HAS_STAGED -ne 0 ]; then
+    log_warn "Local changes detected, stashing them..."
+    set +e
+    git stash push -m "Auto-stash before deployment $(date +%Y%m%d-%H%M%S)" 2>&1 | tee -a "$LOG_FILE"
+    STASH_RESULT=$?
+    set -e
+    if [ $STASH_RESULT -ne 0 ]; then
+        log_warn "Stash failed, resetting local changes..."
+        git reset --hard HEAD 2>&1 | tee -a "$LOG_FILE"
+        git clean -fd 2>&1 | tee -a "$LOG_FILE" || true
+    fi
+fi
+
+# Fetch latest changes first
+log "Fetching latest changes from remote..."
+if ! git fetch origin 2>&1 | tee -a "$LOG_FILE"; then
+    log_error "Git fetch failed"
     exit 1
+fi
+
+# Determine which branch to pull (main or master)
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+log "Current branch: $CURRENT_BRANCH"
+
+# Try to pull from the current branch first, then fallback to main/master
+if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+    PULL_BRANCH="$CURRENT_BRANCH"
+else
+    PULL_BRANCH="main"
+fi
+
+log "Pulling from branch: $PULL_BRANCH"
+if git pull origin "$PULL_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+    log_success "Git pull completed from $PULL_BRANCH"
+else
+    # Try the other branch if current one fails
+    if [ "$PULL_BRANCH" = "main" ]; then
+        log_warn "Pull from main failed, trying master..."
+        if git pull origin master 2>&1 | tee -a "$LOG_FILE"; then
+            log_success "Git pull completed from master"
+        else
+            log_error "Git pull failed from both branches"
+            exit 1
+        fi
+    else
+        log_error "Git pull failed"
+        exit 1
+    fi
 fi
 
 # Step 2: Docker Compose build
@@ -115,4 +174,5 @@ docker compose ps 2>&1 | tee -a "$LOG_FILE"
 
 log "=== Deployment completed successfully for service: $SERVICE_NAME ==="
 exit 0
+
 

@@ -208,6 +208,15 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// GET /webhook - Allow GitHub to test the webhook URL
+app.get('/webhook', (req, res) => {
+  res.status(200).json({
+    message: 'Dynogy webhook endpoint is active',
+    version: state.version,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -223,4 +232,5 @@ app.listen(PORT, '0.0.0.0', () => {
   state.services = detectServices();
   console.log(`Detected ${Object.keys(state.services).length} service(s)`);
 });
+
 

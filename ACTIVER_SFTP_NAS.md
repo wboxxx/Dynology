@@ -24,3 +24,5 @@ Pour améliorer la fiabilité du déploiement, activez SFTP sur votre NAS Synolo
 
 Si rsync est disponible sur votre NAS, le script peut l'utiliser à la place.
 
+
+

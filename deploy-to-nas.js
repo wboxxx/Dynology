@@ -37,9 +37,9 @@ const {
 } = credentials;
 
 // Vérifier les credentials
-if (!host || !username || !password) {
+if (!host || !username || (!password && !sshKeyPath)) {
   console.error('❌ Credentials incomplets dans .nas-credentials');
-  console.error('   Requis: host, username, password');
+  console.error('   Requis: host, username, ET (password OU sshKeyPath)');
   process.exit(1);
 }
 
@@ -61,36 +61,36 @@ const sshConfig = {
 function execSSH(command) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
-    
+
     conn.on('ready', () => {
       conn.exec(command, (err, stream) => {
         if (err) {
           conn.end();
           return reject(err);
         }
-        
+
         let stdout = '';
         let stderr = '';
-        
+
         stream.on('close', (code, signal) => {
           conn.end();
           resolve({ code, signal, stdout, stderr });
         });
-        
+
         stream.on('data', (data) => {
           stdout += data.toString();
         });
-        
+
         stream.stderr.on('data', (data) => {
           stderr += data.toString();
         });
       });
     });
-    
+
     conn.on('error', (err) => {
       reject(err);
     });
-    
+
     conn.connect(sshConfig);
   });
 }
@@ -105,37 +105,37 @@ function copyFileSSH(localFilePath, remoteFilePath, conn) {
       // Normaliser le chemin distant pour utiliser des slashes Unix
       const remoteFileDir = path.dirname(remoteFilePath).replace(/\\/g, '/');
       const normalizedRemotePath = `${remoteFileDir}/${remoteFileName}`.replace(/\\/g, '/');
-      
+
       // Utiliser base64 pour éviter les problèmes d'échappement avec heredoc
       const base64Content = Buffer.from(fileContent).toString('base64');
-      
+
       // Découper en chunks si trop grand (limite de commande shell ~100KB)
       if (base64Content.length > 80000) {
         return reject(new Error(`File too large (${Math.round(base64Content.length / 1024)}KB base64). Max ~60KB original file.`));
       }
-      
+
       // Utiliser base64 pour la copie (plus fiable pour préserver exactement le contenu)
       const command = `mkdir -p "${remoteFileDir}" && echo '${base64Content}' | base64 -d > "${normalizedRemotePath}" && chmod 644 "${normalizedRemotePath}" && test -f "${normalizedRemotePath}" && echo "FILE_OK" || (ls -la "${remoteFileDir}" 2>&1 && echo "FILE_MISSING")`;
-      
+
       conn.exec(command, (err, stream) => {
         if (err) {
           return reject(err);
         }
-        
+
         let stdout = '';
         let stderr = '';
-        
+
         stream.on('data', (data) => {
           stdout += data.toString();
         });
-        
+
         stream.stderr.on('data', (data) => {
           stderr += data.toString();
         });
-        
+
         stream.on('close', (code) => {
           const allOutput = (stdout + stderr).trim();
-          
+
           if (code === 0 && allOutput.includes('FILE_OK')) {
             resolve();
           } else {
@@ -144,7 +144,7 @@ function copyFileSSH(localFilePath, remoteFilePath, conn) {
             console.error(`      Code: ${code}`);
             console.error(`      Stdout: ${stdout.trim() || '(vide)'}`);
             console.error(`      Stderr: ${stderr.trim() || '(vide)'}`);
-            
+
             if (allOutput.includes('FILE_MISSING')) {
               reject(new Error(`File copy failed: ${remoteFileName} was not created. Output: ${allOutput}`));
             } else if (code !== 0) {
@@ -154,7 +154,7 @@ function copyFileSSH(localFilePath, remoteFilePath, conn) {
             }
           }
         });
-        
+
         // Timeout pour cette commande (30 secondes par fichier)
         setTimeout(() => {
           stream.destroy();
@@ -175,13 +175,13 @@ async function copySCP(localPath, remotePath) {
     const baseName = path.basename(localPath);
     const remoteDir = path.dirname(remotePath);
     const conn = new Client();
-    
+
     // Timeout global pour éviter les blocages
     const globalTimeout = setTimeout(() => {
       conn.end();
       reject(new Error('Global timeout: opération trop longue (> 5 minutes)'));
     }, 300000);
-    
+
     conn.on('ready', async () => {
       try {
         // Utiliser méthode fichier par fichier optimisée avec logs détaillés
@@ -196,12 +196,12 @@ async function copySCP(localPath, remotePath) {
         reject(error);
       }
     });
-    
+
     conn.on('error', (err) => {
       clearTimeout(globalTimeout);
       reject(err);
     });
-    
+
     conn.connect(sshConfig);
   });
 }
@@ -209,7 +209,7 @@ async function copySCP(localPath, remotePath) {
 // Fonction optimisée pour copier un dossier fichier par fichier avec logs détaillés
 async function copyDirectoryOptimized(localPath, remotePath, conn) {
   const stats = fs.statSync(localPath);
-  
+
   if (!stats.isDirectory()) {
     // Fichier simple
     console.log(`   📄 Copie du fichier ${path.basename(localPath)}...`);
@@ -217,25 +217,25 @@ async function copyDirectoryOptimized(localPath, remotePath, conn) {
     console.log(`   ✅ ${path.basename(localPath)} copié`);
     return;
   }
-  
+
   // Créer le répertoire de destination (utiliser la même connexion conn)
   console.log(`   📁 Création du répertoire ${path.basename(remotePath)}...`);
   await new Promise((resolveMkdir, rejectMkdir) => {
     const mkdirTimeout = setTimeout(() => {
       rejectMkdir(new Error(`mkdir timeout pour ${remotePath}`));
     }, 10000);
-    
+
     conn.exec(`mkdir -p "${remotePath}" && echo "OK"`, (mkdirErr, mkdirStream) => {
       if (mkdirErr) {
         clearTimeout(mkdirTimeout);
         return rejectMkdir(mkdirErr);
       }
-      
+
       let mkdirData = '';
       mkdirStream.on('data', (data) => {
         mkdirData += data.toString();
       });
-      
+
       mkdirStream.on('close', (code) => {
         clearTimeout(mkdirTimeout);
         if (code === 0 || mkdirData.includes('OK')) {
@@ -245,7 +245,7 @@ async function copyDirectoryOptimized(localPath, remotePath, conn) {
           rejectMkdir(new Error(`mkdir failed (code ${code}): ${mkdirData}`));
         }
       });
-      
+
       mkdirStream.on('end', () => {
         if (mkdirTimeout && mkdirData.includes('OK')) {
           clearTimeout(mkdirTimeout);
@@ -254,40 +254,40 @@ async function copyDirectoryOptimized(localPath, remotePath, conn) {
       });
     });
   });
-  
+
   // Fonction récursive avec logs détaillés
   async function copyRecursive(localDir, remoteDir, level = 0) {
     const indent = '  '.repeat(level);
     try {
       const entries = fs.readdirSync(localDir);
       console.log(`${indent}📁 ${path.basename(localDir)}: ${entries.length} éléments`);
-      
+
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[i];
         const localEntryPath = path.join(localDir, entry);
         const remoteEntryPath = path.join(remoteDir, entry);
         const entryStats = fs.statSync(localEntryPath);
-        
+
         console.log(`${indent}  [${i + 1}/${entries.length}] ${entry}...`);
-        
+
         if (entryStats.isDirectory()) {
           // Créer le sous-répertoire avec timeout
           await new Promise((resolveMkdir, rejectMkdir) => {
             const mkdirTimeout = setTimeout(() => {
               rejectMkdir(new Error(`mkdir timeout pour ${remoteEntryPath}`));
             }, 5000);
-            
+
             conn.exec(`mkdir -p "${remoteEntryPath}"`, (mkdirErr, mkdirStream) => {
               if (mkdirErr) {
                 clearTimeout(mkdirTimeout);
                 return rejectMkdir(mkdirErr);
               }
-              
+
               let mkdirData = '';
               mkdirStream.on('data', (data) => {
                 mkdirData += data.toString();
               });
-              
+
               mkdirStream.on('close', (code) => {
                 clearTimeout(mkdirTimeout);
                 if (code === 0) {
@@ -296,7 +296,7 @@ async function copyDirectoryOptimized(localPath, remotePath, conn) {
                   rejectMkdir(new Error(`mkdir failed (code ${code})`));
                 }
               });
-              
+
               // Si le stream se termine sans close, résoudre quand même
               mkdirStream.on('end', () => {
                 if (mkdirTimeout) {
@@ -323,7 +323,7 @@ async function copyDirectoryOptimized(localPath, remotePath, conn) {
       throw error;
     }
   }
-  
+
   await copyRecursive(localPath, remotePath);
   console.log(`   ✅ Dossier ${path.basename(localPath)} copié avec succès\n`);
 }
@@ -361,10 +361,10 @@ async function deploy() {
     console.log('⚙️  Vérification de la configuration...');
     const envCheck = await execSSH(`test -f ${deployPath}/.env && echo "ok" || echo "missing"`);
     const envExists = envCheck.stdout.trim() === 'ok';
-    
+
     // Étape 4: Copier les fichiers
     console.log('📦 Copie des fichiers...');
-    
+
     const filesToCopy = [
       { local: 'agent', remote: `${deployPath}/agent` },
       { local: 'docker-compose.yml', remote: `${deployPath}/docker-compose.yml` },
@@ -393,8 +393,9 @@ async function deploy() {
       }
     }
 
-    // Rendre deploy.sh exécutable
-    console.log('   Rendre deploy.sh exécutable...');
+    // Convertir les fins de ligne Windows en Unix pour deploy.sh et le rendre exécutable
+    console.log('   Conversion des fins de ligne et permissions pour deploy.sh...');
+    await execSSH(`dos2unix ${deployPath}/agent/deploy.sh 2>/dev/null || sed -i 's/\\r$//' ${deployPath}/agent/deploy.sh`);
     await execSSH(`chmod +x ${deployPath}/agent/deploy.sh`);
 
     console.log('✅ Fichiers copiés\n');
@@ -413,7 +414,7 @@ async function deploy() {
     console.log('🐳 Vérification de Docker...');
     let dockerCmd = 'docker';
     let composeCmd = 'docker compose';
-    
+
     // Chemins Synology courants pour Docker
     const dockerPaths = [
       'docker',
@@ -421,7 +422,7 @@ async function deploy() {
       '/var/packages/Docker/target/usr/bin/docker',
       '/usr/bin/docker'
     ];
-    
+
     let dockerFound = false;
     for (const dockerPath of dockerPaths) {
       try {
@@ -440,7 +441,7 @@ async function deploy() {
         continue;
       }
     }
-    
+
     if (!dockerFound) {
       console.error('❌ Docker non trouvé sur le NAS.');
       console.error('\n💡 Solutions possibles:');
@@ -458,28 +459,28 @@ async function deploy() {
     console.log('🔐 Vérification des permissions Docker...');
     const testDockerCmd = useSudo ? `sudo ${dockerCmd}` : dockerCmd;
     const permissionCheck = await execSSH(`${testDockerCmd} ps 2>&1`);
-    
+
     // Vérifier le code de retour ET les messages d'erreur dans stdout ou stderr
     const errorOutput = (permissionCheck.stderr || '') + (permissionCheck.stdout || '');
-    const hasPermissionError = 
-      permissionCheck.code !== 0 || 
-      errorOutput.includes('permission denied') || 
+    const hasPermissionError =
+      permissionCheck.code !== 0 ||
+      errorOutput.includes('permission denied') ||
       errorOutput.includes('dial unix');
-    
+
     if (hasPermissionError) {
       // Si useSudo est activé, on continue quand même (sudo sera utilisé)
       if (useSudo) {
         console.log('⚠️  Permission refusée sans sudo, mais useSudo est activé - continuation avec sudo...\n');
       } else {
         console.error('\n❌ Permission refusée pour accéder à Docker.\n');
-        
+
         // Diagnostic supplémentaire (compatible Synology)
         console.log('🔍 Diagnostic en cours...');
         try {
           const userCheck = await execSSH(`id`);
           const dockerSocketCheck = await execSSH(`ls -la /var/run/docker.sock 2>&1`);
           const dockerGroupCheck = await execSSH(`getent group docker 2>&1 || cat /etc/group | grep docker 2>&1`);
-          
+
           console.log(`   Utilisateur actuel: ${userCheck.stdout.trim() || userCheck.stderr.trim()}`);
           if (dockerGroupCheck.stdout || dockerGroupCheck.stderr) {
             const groupInfo = (dockerGroupCheck.stdout || dockerGroupCheck.stderr).trim();
@@ -495,7 +496,7 @@ async function deploy() {
         } catch (e) {
           // Ignorer les erreurs de diagnostic
         }
-        
+
         console.error('\n💡 Solutions:');
         console.error('\n   Option 1 - Vérifier et ajouter au groupe docker (Synology):');
         console.error(`   ssh ${username}@${host}`);
@@ -504,7 +505,7 @@ async function deploy() {
         console.error(`   sudo synogroup --member docker ${username}`);
         console.error(`   # IMPORTANT: Déconnectez-vous (exit) puis reconnectez-vous (ssh) pour que les changements prennent effet`);
         console.error(`   # Après reconnexion, vérifiez: id | grep docker`);
-        
+
         console.error('\n   Option 2 - Corriger les permissions du socket Docker (RECOMMANDÉ):');
         console.error(`   ssh ${username}@${host}`);
         console.error(`   ls -la /var/run/docker.sock  # Vérifiez les permissions actuelles`);
@@ -512,23 +513,23 @@ async function deploy() {
         console.error(`   sudo chmod 660 /var/run/docker.sock`);
         console.error(`   # Testez: docker ps`);
         console.error(`   # Si ça fonctionne, relancez: npm run deploy`);
-        
+
         console.error('\n   Option 3 - Utiliser sudo (solution rapide):');
         console.error(`   Modifiez .nas-credentials et ajoutez: "useSudo": true`);
         console.error(`   Le script utilisera alors sudo pour toutes les commandes Docker`);
-        
+
         console.error('\n   Option 4 - Vérifier le propriétaire du socket:');
         console.error(`   ssh ${username}@${host} "ls -la /var/run/docker.sock"`);
         console.error(`   # Le socket doit être accessible par votre utilisateur ou le groupe docker\n`);
-        
+
         process.exit(1);
       }
     }
-    
+
     if (!hasPermissionError || useSudo) {
       console.log('✅ Permissions Docker OK\n');
     }
-    
+
     // Étape 7: Vérifier que les fichiers nécessaires sont présents
     console.log('🔍 Vérification des fichiers nécessaires...');
     const fileCheck = await execSSH(`cd ${deployPath} && ls -la agent/Dockerfile agent/package.json docker-compose.yml 2>&1`);
@@ -538,20 +539,20 @@ async function deploy() {
       process.exit(1);
     }
     console.log('✅ Fichiers présents\n');
-    
+
     // Étape 8: Lancer docker compose
     console.log('🚀 Démarrage de Dynogy Agent...');
-    
+
     // Utiliser sudo si configuré dans les credentials
     const finalDockerCmd = useSudo ? `sudo ${dockerCmd}` : dockerCmd;
     const finalComposeCmd = useSudo ? `sudo ${composeCmd}` : composeCmd;
-    
+
     if (useSudo) {
       console.log(`   (Utilisation de sudo pour Docker)\n`);
     }
-    
+
     console.log(`   cd ${deployPath} && ${finalComposeCmd} up -d --build\n`);
-    
+
     const deployResult = await execSSH(`cd ${deployPath} && ${finalComposeCmd} up -d --build`);
     if (deployResult.stdout) {
       console.log(deployResult.stdout);

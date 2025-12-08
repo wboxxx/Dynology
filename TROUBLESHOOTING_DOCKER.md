@@ -76,3 +76,5 @@ ssh vincent.boiteau@192.168.1.51 "docker compose version"
 
 Si ces commandes fonctionnent, le script de déploiement devrait aussi fonctionner.
 
+
+
